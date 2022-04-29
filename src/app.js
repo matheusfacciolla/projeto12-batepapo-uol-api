@@ -20,7 +20,7 @@ const porta = process.env.PORTA;
 
 //Participants endpoints
 
-app.post('/participants', async (req, res) => {
+app.post("/participants", async (req, res) => {
 
     const { name } = req.body;
 
@@ -55,7 +55,7 @@ app.post('/participants', async (req, res) => {
 
     } catch (error) {
         res.sendStatus(422);
-        console.error(error);
+        console.log(error);
         mongoClient.close();
     }
 });
@@ -72,7 +72,68 @@ app.get("/participants", async (req, res) => {
 
     } catch (error) {
         res.status(500).send(error);
-        console.error(error);
+        console.log(error);
+        mongoClient.close();
+    }
+});
+
+//Messages endpoints
+
+app.post("/messages", async (req, res) => {
+
+    const from = req.headers.user;
+    const { to, text, type } = req.body;
+
+    try {
+        await mongoClient.connect();
+        db = mongoClient.db(database);
+
+        const userExist = await db.collection("messages").findOne({name: from});
+        const validToAndText = schema.validate({ to: to, text: text });
+
+        if (type === "message" || type === "private_message" && userExist != undefined && validToAndText ) {
+            await db.collection(userExist).insertOne({
+                to: to,
+                text: text,
+                type: type,
+                time: dayjs(Date.now()).format("HH:MM:SS")
+            });
+
+            res.sendStatus(201);
+            mongoClient.close();
+        }
+ 
+    } catch (error) {
+        res.sendStatus(422);
+        console.log(error);
+        mongoClient.close();
+    }
+});
+
+app.get("/messages", async (req, res) => {
+    const { limit } = req.query;
+    const qtdMessages = (limit - 1) * limit;
+
+    try {
+        await mongoClient.connect();
+        db = mongoClient.db(database);
+
+        const messages = await db.collection("messages").find({}).toArray();
+        const typeOfMessage = await db.collection("messages").findOne({type: "message"});
+
+        if(typeOfMessage.type === "message"){
+            if (!limit) {
+                res.status(200).send(messages);
+                mongoClient.close();
+            } else {
+                res.status(200).send(qtdMessages);
+                mongoClient.close();
+            }
+        }
+ 
+    } catch (error) {
+        res.status(500).send(error);
+        console.log(error);
         mongoClient.close();
     }
 });
