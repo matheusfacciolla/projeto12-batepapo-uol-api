@@ -5,18 +5,59 @@ import chalk from "chalk";
 import dayjs from "dayjs";
 import dotenv from "dotenv";
 
-import schema from "./schema.js";
+import Joi from "joi";
 
-dotenv.config();
+//Global Configurations
 
 const app = express();
 app.use(cors());
 app.use(json());
+dotenv.config();
 
 let db = null;
 const database = process.env.BANCO_MONGO;
 const mongoClient = new MongoClient(process.env.MONGO_URI);
 const porta = process.env.PORTA;
+const promise = mongoClient.connect();
+
+promise.then(() => {
+    db = mongoClient.db(database);
+});
+promise.catch(error => console.log("error to connect", error));
+
+//Schemas
+
+const participantSchema = Joi.object({
+    name: Joi
+        .string()
+        .alphanum()
+        .required(),
+
+    lastStatus: Joi
+        .number()
+        .integer(),
+});
+
+const messageSchema = Joi.object({
+    from: Joi
+        .string()
+        .required(),
+    to: Joi
+        .string()
+        .alphanum()
+        .required(),
+
+    text: Joi
+        .string()
+        .alphanum()
+        .required(),
+    type: Joi
+        .string()
+        .valid("message", "private_message")
+        .required(),
+    time: Joi.
+        string()
+});
 
 //Participants endpoints
 
@@ -25,17 +66,15 @@ app.post("/participants", async (req, res) => {
     const { name } = req.body;
 
     try {
-        await mongoClient.connect();
-        db = mongoClient.db(database);
+        const userExist = await db.collection("participants").findOne({ name });
+        const validName = participantSchema.validate({ name: name }, { abortEarly: false });
 
-        const userExist = await db.collection("participants").findOne({name: name});
-        const validName = schema.validate({ name: name });
-
-        if (userExist != undefined) {
+        if (userExist != undefined || validName.error) {
             res.sendStatus(409);
+            console.log(validName.error.details[0])
             mongoClient.close();
 
-        } else if (validName && userExist == undefined) {
+        } else {
             await db.collection("participants").insertOne({
                 name: name,
                 lastStatus: Date.now()
@@ -46,7 +85,7 @@ app.post("/participants", async (req, res) => {
                 to: "Todos",
                 text: "entra na sala...",
                 type: "status",
-                time: dayjs(Date.now()).format("HH:MM:SS"),
+                time: dayjs(Date.now()).format("HH:mm:ss"),
             });
 
             res.sendStatus(201);
@@ -62,9 +101,6 @@ app.post("/participants", async (req, res) => {
 
 app.get("/participants", async (req, res) => {
     try {
-        await mongoClient.connect();
-        db = mongoClient.db(database);
-
         const participants = await db.collection("participants").find({}).toArray();
 
         res.status(200).send(participants);
@@ -85,24 +121,27 @@ app.post("/messages", async (req, res) => {
     const { to, text, type } = req.body;
 
     try {
-        await mongoClient.connect();
-        db = mongoClient.db(database);
+        const userExist = await db.collection("participants").findOne({ from });
+        const validToAndText = messageSchema.validate({ from: userExist.name, to: to, text: text, type: type }, { abortEarly: false });
 
-        const userExist = await db.collection("messages").findOne({name: from});
-        const validToAndText = schema.validate({ to: to, text: text });
+        if (!userExist || validToAndText.error) {
+            res.sendStatus(422);
+            console.log(validToAndText.error.details[0]);
+            mongoClient.close();
 
-        if (type === "message" || type === "private_message" && userExist != undefined && validToAndText ) {
-            await db.collection(userExist).insertOne({
+        } else {
+            await db.collection("messages").insertOne({
+                from: userExist.name,
                 to: to,
                 text: text,
                 type: type,
-                time: dayjs(Date.now()).format("HH:MM:SS")
+                time: dayjs(Date.now()).format("HH:mm:ss")
             });
 
             res.sendStatus(201);
             mongoClient.close();
         }
- 
+
     } catch (error) {
         res.sendStatus(422);
         console.log(error);
@@ -112,27 +151,61 @@ app.post("/messages", async (req, res) => {
 
 app.get("/messages", async (req, res) => {
     const { limit } = req.query;
-    const qtdMessages = (limit - 1) * limit;
+    const { user } = req.headers;
 
     try {
-        await mongoClient.connect();
-        db = mongoClient.db(database);
+        const messages = await db.collection("messages").find(
+            {
+                $or: [
+                    { type: "message" },
+                    { to: "Todos" },
+                    { to: user },
+                    { from: user }
+                ]
+            }).toArray();
 
-        const messages = await db.collection("messages").find({}).toArray();
-        const typeOfMessage = await db.collection("messages").findOne({type: "message"});
-
-        if(typeOfMessage.type === "message"){
-            if (!limit) {
-                res.status(200).send(messages);
-                mongoClient.close();
-            } else {
-                res.status(200).send(qtdMessages);
-                mongoClient.close();
-            }
+        if (!limit) {
+            res.status(200).send(messages);
+            mongoClient.close();
+        } else {
+            const qtdMessages = (limit - 1) * limit;
+            res.status(200).send(slice(0, qtdMessages));
+            mongoClient.close();
         }
- 
+
     } catch (error) {
         res.status(500).send(error);
+        console.log(error);
+        mongoClient.close();
+    }
+});
+
+//Status endpoints
+
+app.post("/status", async (req, res) => {
+
+    const { user } = req.headers;
+
+    try {
+        const userExist = await db.collection("participants").findOne({ user });
+
+
+        if (!userExist) {
+            res.sendStatus(404);
+            mongoClient.close();
+        } else {
+            await db.collection("participants").updateOne(
+                { name: user },
+                {
+                    $set: { lastStatus: Date.now() }
+                });
+
+            res.sendStatus(200);
+            mongoClient.close();
+        }
+
+    } catch (error) {
+        res.sendStatus(500);
         console.log(error);
         mongoClient.close();
     }
