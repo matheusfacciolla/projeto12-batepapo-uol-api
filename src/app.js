@@ -4,7 +4,6 @@ import cors from "cors";
 import chalk from "chalk";
 import dayjs from "dayjs";
 import dotenv from "dotenv";
-
 import Joi from "joi";
 
 //Global Configurations
@@ -149,13 +148,13 @@ app.get("/messages", async (req, res) => {
 
     try {
         const messages = await db.collection("messages").find({
-                $or: [
-                    { type: "message" },
-                    { to: "Todos" },
-                    { to: user },
-                    { from: user }
-                ]
-            }).toArray();
+            $or: [
+                { type: "message" },
+                { to: "Todos" },
+                { to: user },
+                { from: user }
+            ]
+        }).toArray();
 
         if (!limit) {
             res.status(200).send(messages);
@@ -223,6 +222,35 @@ setInterval(async () => {
         return;
     }
 }, 15000);
+
+//Delete endpoint
+app.delete("/messages/:ID_DA_MENSAGEM", async (req, res) => {
+    const { ID_DA_MENSAGEM } = req.params;
+    const { user } = req.headers;
+
+    try {
+        const isMessageExist = await db.collection("messages").findOne({ _id: new ObjectId(ID_DA_MENSAGEM) });
+
+        if (!isMessageExist) {
+            res.sendStatus(404);
+            return;
+
+        } else if (isMessageExist.from != user) {
+            res.sendStatus(401);
+            return;
+
+        } else {
+            await db.collection("messages").deleteOne({ _id: new ObjectId(ID_DA_MENSAGEM) });
+            res.sendStatus(200);
+            return;
+        }
+
+    } catch (error) {
+        res.status(500).send(error);
+        console.log(error);
+        return;
+    }
+});
 
 app.listen(porta, () => {
     console.log(chalk.bold.green(`Server is running at http://localhost:${porta}`))
