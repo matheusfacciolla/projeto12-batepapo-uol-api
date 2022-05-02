@@ -1,5 +1,5 @@
 import express, { json } from "express";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import cors from "cors";
 import chalk from "chalk";
 import dayjs from "dayjs";
@@ -8,7 +8,6 @@ import dotenv from "dotenv";
 import Joi from "joi";
 
 //Global Configurations
-
 const app = express();
 app.use(cors());
 app.use(json());
@@ -26,7 +25,6 @@ promise.then(() => {
 promise.catch(error => console.log("error to connect", error));
 
 //Schemas
-
 const participantSchema = Joi.object({
     name: Joi
         .string()
@@ -60,7 +58,6 @@ const messageSchema = Joi.object({
 });
 
 //Participants endpoints
-
 app.post("/participants", async (req, res) => {
 
     const { name } = req.body;
@@ -71,8 +68,8 @@ app.post("/participants", async (req, res) => {
 
         if (userExist != undefined || validName.error) {
             res.sendStatus(409);
-            console.log(validName.error.details[0])
-            mongoClient.close();
+            console.log(validName.error);
+            return;
 
         } else {
             await db.collection("participants").insertOne({
@@ -89,63 +86,60 @@ app.post("/participants", async (req, res) => {
             });
 
             res.sendStatus(201);
-            mongoClient.close();
+            return;
         }
 
     } catch (error) {
         res.sendStatus(422);
         console.log(error);
-        mongoClient.close();
+        return;
     }
 });
 
 app.get("/participants", async (req, res) => {
     try {
         const participants = await db.collection("participants").find({}).toArray();
-
         res.status(200).send(participants);
-        mongoClient.close();
+        return;
 
     } catch (error) {
         res.status(500).send(error);
         console.log(error);
-        mongoClient.close();
+        return;
     }
 });
 
 //Messages endpoints
-
 app.post("/messages", async (req, res) => {
 
     const from = req.headers.user;
     const { to, text, type } = req.body;
 
     try {
-        const userExist = await db.collection("participants").findOne({ from });
-        const validToAndText = messageSchema.validate({ from: userExist.name, to: to, text: text, type: type }, { abortEarly: false });
+        const userExist = await db.collection("participants").findOne({ name: from });
+        const validToAndText = messageSchema.validate({ from: from, to: to, text: text, type: type }, { abortEarly: false });
 
         if (!userExist || validToAndText.error) {
             res.sendStatus(422);
-            console.log(validToAndText.error.details[0]);
-            mongoClient.close();
+            console.log(validToAndText.error);
+            return;
 
         } else {
             await db.collection("messages").insertOne({
-                from: userExist.name,
+                from: from,
                 to: to,
                 text: text,
                 type: type,
                 time: dayjs(Date.now()).format("HH:mm:ss")
             });
-
             res.sendStatus(201);
-            mongoClient.close();
+            return;
         }
 
     } catch (error) {
         res.sendStatus(422);
         console.log(error);
-        mongoClient.close();
+        return;
     }
 });
 
@@ -154,8 +148,7 @@ app.get("/messages", async (req, res) => {
     const { user } = req.headers;
 
     try {
-        const messages = await db.collection("messages").find(
-            {
+        const messages = await db.collection("messages").find({
                 $or: [
                     { type: "message" },
                     { to: "Todos" },
@@ -166,50 +159,70 @@ app.get("/messages", async (req, res) => {
 
         if (!limit) {
             res.status(200).send(messages);
-            mongoClient.close();
+            return;
+
         } else {
-            const qtdMessages = (limit - 1) * limit;
-            res.status(200).send(slice(0, qtdMessages));
-            mongoClient.close();
+            const qtdMessages = messages.slice(-limit)
+            res.status(200).send(qtdMessages);
+            return;
         }
 
     } catch (error) {
         res.status(500).send(error);
         console.log(error);
-        mongoClient.close();
+        return;
     }
 });
 
 //Status endpoints
-
 app.post("/status", async (req, res) => {
-
     const { user } = req.headers;
 
     try {
-        const userExist = await db.collection("participants").findOne({ user });
-
+        const userExist = await db.collection("participants").findOne({ name: user });
 
         if (!userExist) {
             res.sendStatus(404);
-            mongoClient.close();
-        } else {
-            await db.collection("participants").updateOne(
-                { name: user },
-                {
-                    $set: { lastStatus: Date.now() }
-                });
+            return;
 
+        } else {
+            await db.collection("participants").updateOne({ name: user }, { $set: { lastStatus: Date.now() } });
             res.sendStatus(200);
-            mongoClient.close();
+            return;
         }
 
     } catch (error) {
         res.sendStatus(500);
         console.log(error);
-        mongoClient.close();
+        return;
     }
 });
+
+//Att inactive users
+setInterval(async () => {
+    try {
+        const users = await db.collection("participants").find({}).toArray();
+        const isInactiveUsers = users.find((user) => { (Date.now() - user.lastStatus > 10000) });
+
+        users.forEach(async (user) => {
+            if (isInactiveUsers) {
+                await db.collection("participants").deleteOne(user);
+                await db.collection("messages").insertOne({
+                    from: user.name,
+                    to: "Todos",
+                    text: "sai da sala...",
+                    type: "status",
+                    time: dayjs(Date.now()).format("HH:mm:ss"),
+                });
+                return;
+            }
+        });
+
+    } catch (error) {
+        console.log(error);
+        return;
+    }
+}, 15000);
 
 app.listen(porta, () => {
     console.log(chalk.bold.green(`Server is running at http://localhost:${porta}`))
