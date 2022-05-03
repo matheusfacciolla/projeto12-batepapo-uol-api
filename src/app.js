@@ -6,7 +6,6 @@ import dayjs from "dayjs";
 import dotenv from "dotenv";
 import Joi from "joi";
 
-//Global Configurations
 const app = express();
 app.use(cors());
 app.use(json());
@@ -23,13 +22,10 @@ promise.then(() => {
 });
 promise.catch(error => console.log("error to connect", error));
 
-//Schemas
 const participantSchema = Joi.object({
     name: Joi
         .string()
-        .alphanum()
         .required(),
-
     lastStatus: Joi
         .number()
         .integer(),
@@ -41,12 +37,9 @@ const messageSchema = Joi.object({
         .required(),
     to: Joi
         .string()
-        .alphanum()
         .required(),
-
     text: Joi
         .string()
-        .alphanum()
         .required(),
     type: Joi
         .string()
@@ -56,7 +49,6 @@ const messageSchema = Joi.object({
         string()
 });
 
-//Participants endpoints
 app.post("/participants", async (req, res) => {
 
     const { name } = req.body;
@@ -76,8 +68,8 @@ app.post("/participants", async (req, res) => {
                 lastStatus: Date.now()
             });
 
-            await db.collection("successMessage").insertOne({
-                from: validName.name,
+            await db.collection("messages").insertOne({
+                from: name,
                 to: "Todos",
                 text: "entra na sala...",
                 type: "status",
@@ -108,11 +100,10 @@ app.get("/participants", async (req, res) => {
     }
 });
 
-//Messages endpoints
 app.post("/messages", async (req, res) => {
 
-    const from = req.headers.user;
     const { to, text, type } = req.body;
+    const from = req.headers.user;
 
     try {
         const userExist = await db.collection("participants").findOne({ name: from });
@@ -173,7 +164,6 @@ app.get("/messages", async (req, res) => {
     }
 });
 
-//Status endpoints
 app.post("/status", async (req, res) => {
     const { user } = req.headers;
 
@@ -197,33 +187,6 @@ app.post("/status", async (req, res) => {
     }
 });
 
-//Att inactive users
-setInterval(async () => {
-    try {
-        const users = await db.collection("participants").find({}).toArray();
-        const isInactiveUsers = users.find((user) => { (Date.now() - user.lastStatus > 10000) });
-
-        users.forEach(async (user) => {
-            if (isInactiveUsers) {
-                await db.collection("participants").deleteOne(user);
-                await db.collection("messages").insertOne({
-                    from: user.name,
-                    to: "Todos",
-                    text: "sai da sala...",
-                    type: "status",
-                    time: dayjs(Date.now()).format("HH:mm:ss"),
-                });
-                return;
-            }
-        });
-
-    } catch (error) {
-        console.log(error);
-        return;
-    }
-}, 15000);
-
-//Delete endpoint
 app.delete("/messages/:ID_DA_MENSAGEM", async (req, res) => {
     const { ID_DA_MENSAGEM } = req.params;
     const { user } = req.headers;
@@ -251,6 +214,73 @@ app.delete("/messages/:ID_DA_MENSAGEM", async (req, res) => {
         return;
     }
 });
+
+app.put('/messages/:ID_DA_MENSAGEM', async (req, res) => {
+    const { ID_DA_MENSAGEM } = req.params;
+    const { user } = req.headers;
+    const { to, text, type } = req.body;
+
+    try {
+        const isUserExist = await db.collection('participants').findOne({ name: user });
+        const isMessageExist = await db.collection("messages").findOne({ _id: new ObjectId(ID_DA_MENSAGEM) });
+        const validMessage = messageSchema.validate({ from: user, to: to, text: text, type: type }, { abortEarly: false });
+
+        if (!isMessageExist) {
+            res.sendStatus(404);
+            return;
+
+        } else if (validMessage.error) {
+            console.log(error);
+            res.sendStatus(402);
+            return;
+
+        } else if (!isUserExist) {
+            res.sendStatus(404);
+            return;
+
+        } else if (isMessageExist.from != user) {
+            res.sendStatus(401);
+            return;
+
+        } else {
+            await db.collection("messages").updateOne({ _id: new ObjectId(ID_DA_MENSAGEM) }, { $set: { ...validMessage.value, time: dayjs(Date.now()).format("HH:mm:ss") } });
+            res.sendStatus(200);
+            return;
+        }
+
+    } catch (error) {
+        res.status(500).send(error);
+    }
+});
+
+setInterval(async () => {
+    try {
+        const users = await db.collection("participants").find({}).toArray();
+        const isInactiveUsers = users.filter((user) => {
+            if (Date.now() - user.lastStatus > 10000) {
+                return user;
+            }
+        });
+
+        if (isInactiveUsers.length > 0) {
+            isInactiveUsers.forEach((isInactiveUser) => {
+                if (isInactiveUsers) {
+                    db.collection("participants").deleteOne(isInactiveUser);
+                    db.collection("messages").insertOne({
+                        from: isInactiveUser.name,
+                        to: "Todos",
+                        text: "sai da sala...",
+                        type: "status",
+                        time: dayjs(Date.now()).format("HH:mm:ss"),
+                    });
+                }
+            });
+        }
+    } catch (error) {
+        console.log(error);
+        return;
+    }
+}, 15000);
 
 app.listen(porta, () => {
     console.log(chalk.bold.green(`Server is running at http://localhost:${porta}`))
